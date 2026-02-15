@@ -2,25 +2,38 @@
 import { GoogleGenAI } from "@google/genai";
 import { AnalysisResult, GroundingSource, DetailedContext } from "../types";
 
+// Helper to clean JSON string from Markdown code blocks
+const cleanJsonText = (text: string): string => {
+  return text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+};
+
+const getAiClient = () => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("API Keyが設定されていません。環境変数 API_KEY を確認してください。");
+  }
+  return new GoogleGenAI({ apiKey });
+};
+
 /**
  * 日本国内の地理・インフラ特性を熟知した専門OSINT-AI「ここどこAI」
  */
 export const analyzeLocationImage = async (base64Image: string): Promise<AnalysisResult> => {
-  // Use process.env.API_KEY directly when initializing the @google/genai client instance.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = getAiClient();
   
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: "image/jpeg",
-            data: base64Image.split(",")[1],
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: base64Image.split(",")[1],
+            },
           },
-        },
-        {
-          text: `あなたは日本国内の地理・インフラ・文字情報分析に特化した超高精度OSINT AIです。
+          {
+            text: `あなたは日本国内の地理・インフラ・文字情報分析に特化した超高精度OSINT AIです。
 提供された画像から撮影場所をピンポイントで特定し、その根拠と共にJSON形式で出力してください。
 
 **重要: 以下の順序で論理的に場所を絞り込んでください。**
@@ -69,25 +82,30 @@ export const analyzeLocationImage = async (base64Image: string): Promise<Analysi
   "environmentContext": "周辺環境の要約",
   "description": "論理的な特定プロセス全文"
 }`,
-        },
-      ],
-    },
-    config: {
-      responseMimeType: "application/json",
-      temperature: 0, // 決定論的動作によりハルシネーションを抑制
-    },
-  });
+          },
+        ],
+      },
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0, // 決定論的動作によりハルシネーションを抑制
+      },
+    });
 
-  const rawText = response.text || "{}";
-  try {
-    const parsed = JSON.parse(rawText);
-    return {
-      ...parsed,
-      visualEvidence: Array.isArray(parsed.visualEvidence) ? parsed.visualEvidence : []
-    } as AnalysisResult;
-  } catch (e) {
-    console.error("Failed to parse analysis result:", e);
-    throw new Error("解析データの読み込みに失敗しました。");
+    const rawText = cleanJsonText(response.text || "{}");
+    
+    try {
+      const parsed = JSON.parse(rawText);
+      return {
+        ...parsed,
+        visualEvidence: Array.isArray(parsed.visualEvidence) ? parsed.visualEvidence : []
+      } as AnalysisResult;
+    } catch (e) {
+      console.error("Failed to parse analysis result. Raw text:", rawText, e);
+      throw new Error("AIからの応答が不正な形式でした。");
+    }
+  } catch (error: any) {
+    console.error("Gemini API Error:", error);
+    throw new Error(error.message || "解析中にエラーが発生しました。");
   }
 };
 
@@ -95,21 +113,21 @@ export const analyzeLocationImage = async (base64Image: string): Promise<Analysi
  * プログレードモデルによる極限フォレンジック鑑定
  */
 export const analyzeDetailedContext = async (base64Image: string, currentResult: AnalysisResult): Promise<DetailedContext> => {
-  // Use process.env.API_KEY directly when initializing the @google/genai client instance.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = getAiClient();
   
-  const response = await ai.models.generateContent({
-    model: "gemini-3-pro-preview", 
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: "image/jpeg",
-            data: base64Image.split(",")[1],
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-pro-preview", 
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: base64Image.split(",")[1],
+            },
           },
-        },
-        {
-          text: `あなたは科学捜査レベルの画像解析能力を持つ高度OSINT分析官です。
+          {
+            text: `あなたは科学捜査レベルの画像解析能力を持つ高度OSINT分析官です。
 現在、この場所は「${currentResult.locationName}」周辺と推定されています。
 この仮説を検証し、さらに詳細な状況を特定するために、画像内の微細な情報を再鑑定してください。
 
@@ -128,39 +146,49 @@ export const analyzeDetailedContext = async (base64Image: string, currentResult:
   "signage": "...",
   "forensicConclusion": "..."
 }`,
-        },
-      ],
-    },
-    config: {
-      responseMimeType: "application/json",
-      thinkingConfig: { thinkingBudget: 8000 } 
-    },
-  });
+          },
+        ],
+      },
+      config: {
+        responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 8000 } 
+      },
+    });
 
-  return JSON.parse(response.text || "{}") as DetailedContext;
+    const rawText = cleanJsonText(response.text || "{}");
+    return JSON.parse(rawText) as DetailedContext;
+  } catch (error: any) {
+    console.error("Detailed Analysis Error:", error);
+    throw new Error(error.message || "詳細解析中にエラーが発生しました。");
+  }
 };
 
 /**
  * Google検索による裏付け検証
  */
 export const fetchLocationDetails = async (location: AnalysisResult): Promise<{ text: string, sources: GroundingSource[] }> => {
-  // Use process.env.API_KEY directly when initializing the @google/genai client instance.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `「${location.locationName} ${location.addressGuess}」の地理的整合性を最新のストリートビューデータと公的台帳に基づいて「ここどこAI」として検証し、報告してください。`,
-    config: {
-      tools: [{ googleSearch: {} }],
-    },
-  });
+  const ai = getAiClient();
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `「${location.locationName} ${location.addressGuess}」の地理的整合性を最新のストリートビューデータと公的台帳に基づいて「ここどこAI」として検証し、報告してください。`,
+      config: {
+        tools: [{ googleSearch: {} }],
+      },
+    });
 
-  // Extract website URLs from groundingChunks as per Search Grounding guidelines.
-  const sources: GroundingSource[] = response.candidates?.[0]?.groundingMetadata?.groundingChunks
-    ?.filter((chunk: any) => chunk.web)
-    ?.map((chunk: any) => ({
-      title: chunk.web.title,
-      uri: chunk.web.uri,
-    })) || [];
+    // Extract website URLs from groundingChunks as per Search Grounding guidelines.
+    const sources: GroundingSource[] = response.candidates?.[0]?.groundingMetadata?.groundingChunks
+      ?.filter((chunk: any) => chunk.web)
+      ?.map((chunk: any) => ({
+        title: chunk.web.title,
+        uri: chunk.web.uri,
+      })) || [];
 
-  return { text: response.text || "", sources };
+    return { text: response.text || "", sources };
+  } catch (error: any) {
+    console.warn("Search grounding failed, returning empty result:", error);
+    return { text: "検索による裏付け情報を取得できませんでした。", sources: [] };
+  }
 };
