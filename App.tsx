@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import Header from './components/Header';
 import ResultCard from './components/ResultCard';
@@ -307,7 +306,10 @@ const App: React.FC = () => {
                     key={item.id} 
                     item={item} 
                     onLoad={loadFromHistory} 
-                    onDelete={(e, id) => setState(p => ({...p, history: p.history.filter(h => h.id !== id)}))} 
+                    onDelete={(e, id) => {
+                      e.stopPropagation();
+                      setState(p => ({...p, history: p.history.filter(h => h.id !== id)}));
+                    }} 
                   />
                 ))}
               </div>
